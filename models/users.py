@@ -11,7 +11,7 @@ class User(Base):
         Index("idx_users_name", "name"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True,autoincrement=True,)
     name: Mapped[str] = mapped_column(String(20),unique=True,nullable=False)
     password: Mapped[str] = mapped_column(String(255),nullable=False)
     phone: Mapped[str] = mapped_column(String(11),unique=True,nullable=False)
