@@ -12,7 +12,10 @@ embedding_model = OpenAIEmbeddings(
     api_key=os.getenv("API_KEY"),
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1" ,
     model=os.getenv("EMBEDDING_MODEL"),
-    dimensions=512
+    dimensions=int(os.getenv("DIMENSIONS")),
+    check_embedding_ctx_length=False,
+    chunk_size=10,
+
 )
 
 

@@ -1,6 +1,5 @@
 import os
 from dotenv import load_dotenv
-import asyncio
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams
 
@@ -19,7 +18,7 @@ async def ensure_collection():
         await client.create_collection(
             collection_name=collection_name,
             vectors_config=VectorParams(
-                size=512,
+                size=int(os.getenv("DIMENSIONS")),
                 distance=Distance.COSINE,
             ),
         )

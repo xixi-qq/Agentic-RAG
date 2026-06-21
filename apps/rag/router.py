@@ -95,7 +95,7 @@ async def upload_document(
             failed_document = await get_document_by_id(document_id, db)
             if failed_document:
                 failed_document.status = "failed"
-                failed_document.error_message = str(exc)
+                failed_document.error_message = f"{type(exc).__name__}: {str(exc)[:1000]}"
                 failed_document.chunk_count = 0
                 await db.commit()
 
