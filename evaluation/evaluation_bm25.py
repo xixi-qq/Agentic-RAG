@@ -3,7 +3,7 @@ import json
 import statistics
 import time
 from pathlib import Path
-from apps.rag.retrieval import retrieve_chunk
+from apps.rag.bm25 import search_bm25
 from config.db_config import AsyncSessionLocal, engine
 from config.qdrant_config import client
 
@@ -76,13 +76,12 @@ async def evaluate():
 
             started_at = time.perf_counter()
 
-            retrieved = await retrieve_chunk(
-                user_query=row["question"],
+            retrieved = await search_bm25(
+                query=row["question"],
                 user_id=USER_ID,
                 document_id=row["document_id"],
                 db=db,
                 top_k=TOP_K,
-                score_threshold=SCORE_THRESHOLD,
             )
             latency_ms = (
                                  time.perf_counter() - started_at
@@ -145,8 +144,8 @@ async def evaluate():
 
         }
 
-    details_path = RESULT_DIR / f"{summary["config"]["top_k"]}_{summary["config"]["score_threshold"]}_vector_baseline_details.json"
-    summary_path = RESULT_DIR / f"{summary["config"]["top_k"]}_{summary["config"]["score_threshold"]}_vector_baseline_summary.json"
+    details_path = RESULT_DIR / f"{summary["config"]["top_k"]}_{summary["config"]["score_threshold"]}_bm25_details.json"
+    summary_path = RESULT_DIR / f"{summary["config"]["top_k"]}_{summary["config"]["score_threshold"]}_bm25_summary.json"
 
     details_path.write_text(
         json.dumps(results, ensure_ascii=False, indent=2),
@@ -174,9 +173,5 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-
-
 
 

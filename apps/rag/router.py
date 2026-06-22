@@ -13,6 +13,7 @@ from apps.rag.crud import (
     get_document_by_hash,
     get_document_by_id
 )
+from apps.rag.fusion import retrieve_and_rerank
 from apps.rag.parser import calculate_file_hash
 from apps.rag.reranker import rerank_chunks
 from apps.rag.retrieval import retrieve_chunk, deduplicate_chunks, deduplicate_by_content
@@ -229,12 +230,13 @@ async def query(request: QueryRequest,
     user_query = request.user_query
     document_id = request.document_id
     user_id = user_info["user_id"]
-    retrieve_res = await retrieve_chunk(
-        user_query=user_query,
+    retrieve_res = await retrieve_and_rerank(
+        query=user_query,
         user_id=user_id,
         document_id=document_id,
         db=db,
-        top_k=request.top_k,
+        candidate_k=request.candidate_k,
+        final_k=request.final_k,
         score_threshold=request.score_threshold,
     )
     if not retrieve_res:
