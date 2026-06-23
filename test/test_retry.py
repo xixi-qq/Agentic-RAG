@@ -38,6 +38,7 @@ async def test_retry_failed_document_success(monkeypatch):
     document = make_document()
     cleanup_mock = AsyncMock()
     vector_cleanup_mock = AsyncMock()
+    invalidate_mock = AsyncMock()
 
     monkeypatch.setattr(
         router,
@@ -46,6 +47,11 @@ async def test_retry_failed_document_success(monkeypatch):
     )
     monkeypatch.setattr(router, "delete_document_chunks", cleanup_mock)
     monkeypatch.setattr(router, "delete_vectors", vector_cleanup_mock)
+    monkeypatch.setattr(
+        router.bm25_cache,
+        "invalidate",
+        invalidate_mock,
+    )
 
     async def complete_ingestion(_user_id, doc, _db):
         doc.status = "completed"
@@ -65,6 +71,10 @@ async def test_retry_failed_document_success(monkeypatch):
     assert result["error_message"] is None
     cleanup_mock.assert_awaited_once_with(9, db)
     vector_cleanup_mock.assert_awaited_once_with(9)
+    invalidate_mock.assert_awaited_once_with(
+        user_id=1,
+        document_id=9,
+    )
     assert db.commits == 2
     assert db.rollbacks == 0
 
@@ -127,6 +137,7 @@ async def test_retry_failure_restores_failed_status(monkeypatch):
     db = FakeDB()
     document = make_document()
     failed_document = make_document(status="processing")
+    invalidate_mock = AsyncMock()
 
     monkeypatch.setattr(
         router,
@@ -135,6 +146,11 @@ async def test_retry_failure_restores_failed_status(monkeypatch):
     )
     monkeypatch.setattr(router, "delete_document_chunks", AsyncMock())
     monkeypatch.setattr(router, "delete_vectors", AsyncMock())
+    monkeypatch.setattr(
+        router.bm25_cache,
+        "invalidate",
+        invalidate_mock,
+    )
     monkeypatch.setattr(
         router,
         "ingest_document",
@@ -152,5 +168,9 @@ async def test_retry_failure_restores_failed_status(monkeypatch):
     assert failed_document.status == "failed"
     assert failed_document.error_message == "再次解析失败"
     assert failed_document.chunk_count == 0
+    invalidate_mock.assert_awaited_once_with(
+        user_id=1,
+        document_id=9,
+    )
     assert db.commits == 2
     assert db.rollbacks == 1

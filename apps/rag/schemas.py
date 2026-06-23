@@ -45,14 +45,14 @@ class RetrieveItem(BaseModel):
 class QueryRequest(BaseModel):
     user_query: str = Field(min_length=1, max_length=2000)
     document_id: int | None = None
-    candidate_k: int = Field(default=15, ge=1, le=20)
-    final_k: int = Field(default=5, ge=1, le=20)
-    score_threshold: float = Field(default=0.5, ge=0, le=1)
+    candidate_k: int = Field(default=30, ge=1, le=50)
+    final_k: int = Field(default=5, ge=1, le=10)
+    score_threshold: float = Field(default=0.0, ge=0, le=1)
 
     @model_validator(mode="after")
-    def validate_top_n(self):
-        if self.candidate_k < self.final_k:
-            raise ValueError("top_n 不能大于 top_k")
+    def validate_k(self):
+        if self.final_k > self.candidate_k:
+            raise ValueError("final_k 不能大于 candidate_k")
         return self
 
 

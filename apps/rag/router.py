@@ -4,8 +4,7 @@ from fastapi.responses import JSONResponse
 from fastapi import APIRouter, File, UploadFile, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from apps.rag.agent import response_user_query
+from apps.rag.bm25 import bm25_cache
 from apps.rag.crud import (
     create_document,
     delete_document_chunks,
@@ -13,14 +12,13 @@ from apps.rag.crud import (
     get_document_by_hash,
     get_document_by_id
 )
-from apps.rag.fusion import retrieve_and_rerank
 from apps.rag.parser import calculate_file_hash
-from apps.rag.reranker import rerank_chunks
-from apps.rag.retrieval import retrieve_chunk, deduplicate_chunks, deduplicate_by_content
 from apps.rag.schemas import QueryRequest, QueryResponse
 from apps.rag.service import ingest_document, organize_response
 from apps.rag.storage import upload_file, delete_file
 from apps.rag.vector_store import delete_vectors
+from apps.rag.workflow.context import RAGRuntimeContext, RetrievalConfig
+from apps.rag.workflow.graph import rag_graph
 from config.db_config import get_db
 from utils.jwt import get_current_user
 from settings import ALLOWED_TYPES
@@ -89,6 +87,10 @@ async def upload_document(
             await ingest_document(user_info["user_id"],document,db)
             await db.commit()
             await db.refresh(document)
+            await bm25_cache.invalidate(
+                user_id=user_info["user_id"],
+                document_id=document.id,
+            )
         except Exception as exc:
             document_id = document.id
             await db.rollback()
@@ -152,6 +154,10 @@ async def retry_document(
         raise HTTPException(status_code=409, detail="只有解析失败的文档可以重试")
 
     try:
+        await bm25_cache.invalidate(
+            user_id=user_info["user_id"],
+            document_id=document.id,
+        )
         await delete_document_chunks(document.id, db)
         await delete_vectors(document.id)
         document.status = "processing"
@@ -217,6 +223,10 @@ async def delete_document(document_id: int,user_info=Depends(get_current_user),d
     try:
         await delete_file(document.file_path)
         await delete_vectors(document_id)
+        await bm25_cache.invalidate(
+            user_id=user_info["user_id"],
+            document_id=document.id,
+        )
     except:
         raise HTTPException(status_code=500,detail='文件删除失败')
 
@@ -227,27 +237,28 @@ async def delete_document(document_id: int,user_info=Depends(get_current_user),d
 async def query(request: QueryRequest,
         user_info=Depends(get_current_user),
         db: AsyncSession=Depends(get_db)):
-    user_query = request.user_query
-    document_id = request.document_id
-    user_id = user_info["user_id"]
-    retrieve_res = await retrieve_and_rerank(
-        query=user_query,
-        user_id=user_id,
-        document_id=document_id,
-        db=db,
-        candidate_k=request.candidate_k,
-        final_k=request.final_k,
-        score_threshold=request.score_threshold,
+    result = await rag_graph.ainvoke(
+        {
+            "original_query": request.user_query,
+            "search_query": request.user_query,
+            "rewrite_count": 0,
+        },
+        context=RAGRuntimeContext(
+            user_id=user_info["user_id"],
+            document_id=request.document_id,
+            db=db,
+            retrieval=RetrievalConfig(
+                candidate_k=request.candidate_k,
+                final_k=request.final_k,
+                score_threshold=request.score_threshold,
+            ),
+        ),
     )
-    if not retrieve_res:
-        return QueryResponse(
-    answer="未在文档中找到足够信息，无法回答",
-    sources=[],
-)
-    duplicate_res = deduplicate_chunks(retrieve_res)
-    duplicate_res = deduplicate_by_content(duplicate_res)
-    rerank_res = await rerank_chunks(user_query,duplicate_res,request.top_n)
-    answer = await response_user_query(user_query,rerank_res)
-    response = organize_response(answer,rerank_res)
 
+    answer = result.get(
+        "answer",
+        "未在文档中找到足够信息，无法回答",
+    )
+    candidates = result.get("candidates",[])
+    response = organize_response(answer,candidates)
     return response

@@ -51,6 +51,7 @@ def make_document(document_id=1, status="pending"):
 async def test_upload_success(monkeypatch):
     db = FakeDB()
     document = make_document()
+    invalidate_mock = AsyncMock()
 
     monkeypatch.setattr(router, "calculate_file_hash", AsyncMock(return_value="abc"))
     monkeypatch.setattr(router, "get_document_by_hash", AsyncMock(return_value=None))
@@ -66,6 +67,11 @@ async def test_upload_success(monkeypatch):
         doc.chunk_count = 1
 
     monkeypatch.setattr(router, "ingest_document", complete_ingestion)
+    monkeypatch.setattr(
+        router.bm25_cache,
+        "invalidate",
+        invalidate_mock,
+    )
 
     response = await router.upload_document(
         user_info={"user_id": 1},
@@ -79,6 +85,10 @@ async def test_upload_success(monkeypatch):
     assert body["chunk_count"] == 1
     assert db.commits == 2
     assert db.rollbacks == 0
+    invalidate_mock.assert_awaited_once_with(
+        user_id=1,
+        document_id=1,
+    )
 
 
 async def test_duplicate_completed_document_is_rejected(monkeypatch):
@@ -131,6 +141,7 @@ async def test_parse_failure_keeps_minio_file(monkeypatch):
     document = make_document(document_id=7)
     failed_document = make_document(document_id=7)
     delete_mock = AsyncMock()
+    invalidate_mock = AsyncMock()
 
     monkeypatch.setattr(router, "calculate_file_hash", AsyncMock(return_value="abc"))
     monkeypatch.setattr(router, "get_document_by_hash", AsyncMock(return_value=None))
@@ -151,6 +162,11 @@ async def test_parse_failure_keeps_minio_file(monkeypatch):
         AsyncMock(return_value=failed_document),
     )
     monkeypatch.setattr(router, "delete_file", delete_mock)
+    monkeypatch.setattr(
+        router.bm25_cache,
+        "invalidate",
+        invalidate_mock,
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await router.upload_document(
@@ -161,9 +177,10 @@ async def test_parse_failure_keeps_minio_file(monkeypatch):
 
     assert exc_info.value.status_code == 422
     assert failed_document.status == "failed"
-    assert failed_document.error_message == "解析失败"
+    assert failed_document.error_message == "ValueError: 解析失败"
     assert failed_document.chunk_count == 0
     delete_mock.assert_not_awaited()
+    invalidate_mock.assert_not_awaited()
     assert db.commits == 2
     assert db.rollbacks == 1
 

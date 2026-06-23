@@ -2,7 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.rag.bm25 import search_bm25
 from apps.rag.reranker import rerank_chunks
-from apps.rag.retrieval import retrieve_chunk
+from apps.rag.retrieval import retrieve_chunk, deduplicate_by_content
 from apps.rag.schemas import RetrieveItem
 
 
@@ -57,6 +57,7 @@ async def retrieve_and_rerank(
     )
     if not candidates:
         return []
+    candidates = deduplicate_by_content(candidates)
 
     return await rerank_chunks(
         query=query,
