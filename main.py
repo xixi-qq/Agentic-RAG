@@ -37,10 +37,7 @@ async def lifespan(_app: FastAPI):
             await client.close()
 
 
-
-
 app = FastAPI(lifespan=lifespan)
-
 
 
 app.include_router(user.router.router)
@@ -73,6 +70,14 @@ app.add_middleware(CORSMiddleware,
                    allow_headers=["*"],)
 
 # app.add_middleware(AuthMiddleware)
+
+
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 
 

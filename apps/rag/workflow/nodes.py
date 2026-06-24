@@ -1,3 +1,5 @@
+import logging
+
 from langgraph.runtime import Runtime
 
 from apps.rag.agent import get_content
@@ -9,22 +11,37 @@ from apps.rag.workflow.prompts import router_prompt, contextualize_prompt, rewri
 from apps.rag.workflow.state import RAGState
 from config.agent_config import model
 
+logger = logging.getLogger(__name__)
+
 
 async def router_query(state: RAGState, runtime: Runtime[RAGRuntimeContext]):
     system_prompt = router_prompt
     router_model = model.with_structured_output(RouteDecision)
     response = await router_model.ainvoke([{"role": "system", "content":system_prompt},
                                    *state["messages"]])
+    logger.info(
+        "rag.router decision=%s user_id=%s document_id=%s",
+        response.decision,
+        runtime.context.user_id,
+        runtime.context.document_id,
+    )
     return {"need_retrieve" : response.decision}
 
 async def chat_node(state: RAGState, runtime: Runtime[RAGRuntimeContext]):
     system_prompt = chat_prompt
     answer = await model.ainvoke([{"role": "system", "content":system_prompt},
                                    *state["messages"]])
+    logger.info(
+        "rag.chat answer_length=%s user_id=%s document_id=%s",
+        len(answer.content),
+        runtime.context.user_id,
+        runtime.context.document_id,
+    )
     return {
         "answer": answer.content,
-    "messages": [
-        {
+        "candidates": [],
+        "messages": [
+            {
             "role": "assistant",
             "content": answer.content,
         }
@@ -36,7 +53,14 @@ async def contextualize_node(state: RAGState, runtime: Runtime[RAGRuntimeContext
     system_prompt = contextualize_prompt
     response = await model.ainvoke([{"role": "system", "content":system_prompt},
                                    *state["messages"]])
-    return {"search_query": response.content.strip()}
+    search_query = response.content.strip()
+    logger.info(
+        "rag.contextualize search_query=%r user_id=%s document_id=%s",
+        search_query[:100],
+        runtime.context.user_id,
+        runtime.context.document_id,
+    )
+    return {"search_query": search_query}
 
 
 async def retrieve_node(state: RAGState, runtime: Runtime[RAGRuntimeContext]):
@@ -52,6 +76,13 @@ async def retrieve_node(state: RAGState, runtime: Runtime[RAGRuntimeContext]):
     score_threshold=config.score_threshold,
 )
     content = get_content(candidates)
+    logger.info(
+        "rag.retrieve query=%r candidate_count=%s user_id=%s document_id=%s",
+        query[:100],
+        len(candidates),
+        runtime.context.user_id,
+        runtime.context.document_id,
+    )
     return {
         "search_query": query,
         "candidates": candidates,
@@ -61,6 +92,7 @@ async def retrieve_node(state: RAGState, runtime: Runtime[RAGRuntimeContext]):
 
 async def assess_node(
     state: RAGState,
+    runtime: Runtime[RAGRuntimeContext],
 ) -> dict:
     assess_model = model.with_structured_output(AssessDecision)
     system_prompt = assess_prompt
@@ -68,6 +100,14 @@ async def assess_node(
                                    *state["messages"],
                                {"role": "user", "content":state["retrieved_content"]}])
 
+    logger.info(
+        "rag.assess decision=%s rewrite_count=%s candidate_count=%s user_id=%s document_id=%s",
+        res.decision,
+        state.get("rewrite_count", 0),
+        len(state.get("candidates", [])),
+        runtime.context.user_id,
+        runtime.context.document_id,
+    )
     return {
         "retrieval_sufficient": res.decision,
     }
@@ -77,6 +117,7 @@ async def assess_node(
 
 async def rewrite_node(
     state: RAGState,
+    runtime: Runtime[RAGRuntimeContext],
 ) -> dict:
     system_prompt = rewrite_prompt
 
@@ -85,6 +126,13 @@ async def rewrite_node(
 
     rewritten_query = response.content.strip()
 
+    logger.info(
+        "rag.rewrite search_query=%r rewrite_count=%s user_id=%s document_id=%s",
+        rewritten_query[:100],
+        state.get("rewrite_count", 0) + 1,
+        runtime.context.user_id,
+        runtime.context.document_id,
+    )
     return {
         "search_query": rewritten_query,
         "rewrite_count": (
@@ -95,12 +143,20 @@ async def rewrite_node(
 
 async def generate_node(
     state: RAGState,
+    runtime: Runtime[RAGRuntimeContext],
 ) -> dict:
     system_prompt = rag_prompt
     answer = await model.ainvoke([{"role": "system", "content":system_prompt},
                                  *state["messages"],
                                   {"role": "user","content": state["retrieved_content"]},])
 
+    logger.info(
+        "rag.generate answer_length=%s source_count=%s user_id=%s document_id=%s",
+        len(answer.content),
+        len(state.get("candidates", [])),
+        runtime.context.user_id,
+        runtime.context.document_id,
+    )
     return {
     "answer": answer.content,
     "messages": [
@@ -114,7 +170,15 @@ async def generate_node(
 
 async def reject_node(
     state: RAGState,
+    runtime: Runtime[RAGRuntimeContext],
 ) -> dict:
+    logger.info(
+        "rag.reject rewrite_count=%s candidate_count=%s user_id=%s document_id=%s",
+        state.get("rewrite_count", 0),
+        len(state.get("candidates", [])),
+        runtime.context.user_id,
+        runtime.context.document_id,
+    )
     return {
         "answer": "未在文档中找到足够信息，无法回答",
         "candidates": [],
