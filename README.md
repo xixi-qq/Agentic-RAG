@@ -389,10 +389,3 @@ http://127.0.0.1:8000/docs
 - 可增加 OpenTelemetry / structured logging，方便观察每个 LangGraph 节点耗时和决策
 - 可继续扩展 SQLAgent、联网查询、Tool Calling，但不属于当前已完成能力
 
-## 简历描述参考
-
-可以概括为：
-
-```text
-基于 FastAPI + LangGraph 构建 Agentic RAG 后端系统，实现文档上传解析、向量化入库、BM25 + 向量混合召回、Rerank 重排、多轮会话记忆、查询路由、上下文问题改写、检索充分性判断和 PostgreSQL Checkpoint 状态恢复；基于 42 条评估集对 Vector、BM25、Hybrid、Rerank 方案进行离线评估，最佳方案 Hit@5 达到 88.10%，MRR@5 达到 0.7258。
-```
