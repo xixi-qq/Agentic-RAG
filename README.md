@@ -16,6 +16,8 @@
 - LangGraph Agentic RAG 工作流
 - PostgreSQL Checkpoint 保存 LangGraph 状态
 - 多轮会话基于 `conversation_id` / `thread_id` 串联
+- 会话列表、会话消息查询、会话删除接口
+- 新会话首轮问答后自动生成标题
 - RAG 检索评估脚本与评估结果
 - 单元测试覆盖核心链路
 
@@ -135,6 +137,28 @@ Hybrid RAG 有什么特点？
    - 调用 rerank 模型重排
    - 返回最终 Top K chunks
 
+## 会话与记忆
+
+项目同时使用 MySQL 和 PostgreSQL Checkpoint 处理会话能力，但两者职责不同：
+
+| 存储 | 职责 |
+|---|---|
+| MySQL | 保存业务会话、完整聊天记录、会话标题 |
+| PostgreSQL Checkpoint | 保存 LangGraph 在指定 `thread_id` 下的运行状态 |
+
+`/rag/query` 中的 `conversation_id` 会同时作为：
+
+- MySQL 中的会话 ID；
+- LangGraph checkpoint 的 `thread_id`。
+
+当请求中 `conversation_id` 为 `null` 时，系统会创建新会话。首轮问答完成后，会根据首轮用户问题和回答生成会话标题，并更新到 MySQL 的 `conversations.title`。
+
+当后续请求复用同一个 `conversation_id` 时，系统会：
+
+- 继续向该会话写入 user / assistant 消息；
+- 使用同一个 LangGraph `thread_id` 恢复多轮上下文；
+- 支持“它”“这个”“上面提到的”等追问指代。
+
 ## 评估结果
 
 评估集位于：
@@ -198,6 +222,56 @@ http://127.0.0.1:8000/docs
 | DELETE | `/rag/documents/{document_id}` | 删除文档 |
 | POST | `/rag/query` | RAG 问答 |
 
+### 会话接口
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/conversations/list` | 获取当前用户会话列表 |
+| GET | `/conversations/{conversation_id}/messages` | 获取指定会话的消息列表 |
+| DELETE | `/conversations/{conversation_id}` | 删除指定会话 |
+
+会话列表响应示例：
+
+```json
+{
+  "conversations": [
+    {
+      "id": "9d146823-1b17-41e2-a82c-aa4db00c2290",
+      "title": "Hybrid RAG 有什么特点",
+      "created_at": "2026-06-24T16:15:21",
+      "updated_at": "2026-06-24T16:18:03"
+    }
+  ]
+}
+```
+
+会话消息响应示例：
+
+```json
+{
+  "id": "9d146823-1b17-41e2-a82c-aa4db00c2290",
+  "title": "Hybrid RAG 有什么特点",
+  "messages": [
+    {
+      "id": 1,
+      "role": "user",
+      "content": "Hybrid RAG 是什么？",
+      "created_at": "2026-06-24T16:15:21",
+      "updated_at": "2026-06-24T16:15:21"
+    },
+    {
+      "id": 2,
+      "role": "assistant",
+      "content": "Hybrid RAG 是结合向量检索和关键词检索的检索增强生成方案...",
+      "created_at": "2026-06-24T16:15:23",
+      "updated_at": "2026-06-24T16:15:23"
+    }
+  ],
+  "created_at": "2026-06-24T16:15:21",
+  "updated_at": "2026-06-24T16:15:23"
+}
+```
+
 ### 查询请求示例
 
 ```json
@@ -239,6 +313,8 @@ http://127.0.0.1:8000/docs
   "score_threshold": 0
 }
 ```
+
+如果请求中的 `conversation_id` 为 `null`，系统会创建新会话；如果传入已有 `conversation_id`，系统会继续使用同一会话和同一 LangGraph checkpoint 线程。
 
 ## 环境变量
 
@@ -385,7 +461,6 @@ http://127.0.0.1:8000/docs
 - 路由、改写、检索充分性判断的 prompt 还可以继续通过真实样例调优
 - Rerank 提升明显，但延迟较高，需要根据场景做开关或异步优化
 - BM25 当前使用进程内缓存，服务多实例部署时需要考虑外部检索服务或共享索引
-- 会话接口可以继续补充列表、详情、标题生成、删除等前端友好能力
+- 会话接口已经支持列表、消息查询、删除和首轮标题生成，后续可继续补充标题手动编辑、分页优化和标题生成策略优化
 - 可增加 OpenTelemetry / structured logging，方便观察每个 LangGraph 节点耗时和决策
 - 可继续扩展 SQLAgent、联网查询、Tool Calling，但不属于当前已完成能力
-
