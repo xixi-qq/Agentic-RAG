@@ -17,13 +17,13 @@ async def create_conversation(db: AsyncSession,
     return conversation
 
 
-async def get_all_conversation_titles(db: AsyncSession,
-                           user_id: int) -> list:
-    stmt = select(Conversation.title).where(
+async def get_all_conversations(db: AsyncSession,
+                           user_id: int):
+    stmt = select(Conversation).where(
         Conversation.user_id == user_id
     ).order_by(Conversation.updated_at)
-    result = await db.scalars(stmt)
-    return result.all()
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
 async def get_conversation_by_id(db: AsyncSession,
@@ -36,7 +36,7 @@ async def get_conversation_by_id(db: AsyncSession,
     return result.scalars().first()
 
 
-async def delete_conversation(db: AsyncSession,
+async def delete_conversation_by_id(db: AsyncSession,
                               user_id: int,
                               conversation_id: str) -> bool:
 
@@ -85,8 +85,8 @@ async def get_messages(
     db: AsyncSession,
     user_id: int,
     conversation_id: str,
+    offset: int  = 0,
     limit: int = 50,
-    offset: int = 0,
 ) -> list[ConversationMessage]:
     conversation = await get_conversation_by_id(
         db,
@@ -106,3 +106,23 @@ async def get_messages(
     res = list(messages.scalars().all())
     res.reverse()
     return res
+
+
+async def update_conversation_title(
+    db: AsyncSession,
+    user_id: int,
+    conversation_id: str,
+    title: str,
+) -> Conversation | None:
+    conversation = await get_conversation_by_id(
+        db,
+        user_id,
+        conversation_id,
+    )
+    if conversation is None:
+        return None
+
+    conversation.title = title.strip()
+    await db.flush()
+    await db.refresh(conversation)
+    return conversation

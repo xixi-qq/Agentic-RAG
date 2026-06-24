@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from apps import user,rag
+from apps import user, rag, conversations
 from apps.rag.workflow.graph import create_rag_graph
 from config.qdrant_config import client
 import os
@@ -42,6 +42,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.include_router(user.router.router)
 app.include_router(rag.router.router)
+app.include_router(conversations.router.router)
 
 
 @app.get("/")

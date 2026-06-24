@@ -5,7 +5,8 @@ from fastapi import APIRouter, File, UploadFile, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.conversations.crud import create_conversation, add_message, get_conversation_by_id
+from apps.conversations.crud import create_conversation, add_message, get_conversation_by_id, update_conversation_title
+from apps.conversations.service import generate_conversation_title
 from apps.rag.bm25 import bm25_cache
 from apps.rag.crud import (
     create_document,
@@ -242,9 +243,11 @@ async def query(
         user_info=Depends(get_current_user),
         db: AsyncSession=Depends(get_db)):
     conversation_id = request.conversation_id
+    is_new_conversation = False
     if request.conversation_id is None:
         conversation = await create_conversation(db,user_info["user_id"])
         conversation_id = conversation.id
+        is_new_conversation = True
     else:
         conversation = await get_conversation_by_id(
             db,
@@ -289,6 +292,9 @@ async def query(
     )
     await add_message(db, user_info["user_id"], conversation_id, "user", request.user_query)
     await add_message(db, user_info["user_id"], conversation_id, "assistant", answer)
+    if is_new_conversation and not conversation.title:
+        title = await generate_conversation_title(request.user_query, answer)
+        await update_conversation_title(db, user_info["user_id"],conversation_id,title,)
     candidates = result.get("candidates",[])
     response = organize_response(conversation_id,answer,candidates)
     return response
