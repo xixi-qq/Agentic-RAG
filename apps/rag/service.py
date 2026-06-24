@@ -35,12 +35,19 @@ async def ingest_document(user_id: int,document: Document,
     finally:
         await asyncio.to_thread(temp_path.unlink, missing_ok=True)
 
-def organize_response(answer: str,rerank_results: list[RetrieveItem]) -> QueryResponse:
+def organize_response(
+    conversation_id: str,
+    answer: str,
+    rerank_results: list[RetrieveItem],
+) -> QueryResponse:
     sources = [QuerySource(
             filename=item.metadata.filename,
             page_number=item.metadata.page_number,
             score=item.score,)
             for item in rerank_results
     ]
-    return QueryResponse(answer=answer,sources=sources)
-
+    return QueryResponse(
+        conversation_id=conversation_id,
+        answer=answer,
+        sources=sources,
+    )

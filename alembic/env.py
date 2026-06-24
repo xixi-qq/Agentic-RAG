@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from models.base import Base
 from models.users import User
 from models.documents import Document, DocumentChunk
+from models.conversations import Conversation, ConversationMessage
 
 load_dotenv()
 

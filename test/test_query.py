@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -25,22 +26,29 @@ def make_retrieve_item() -> RetrieveItem:
 
 
 async def test_query_returns_fallback_without_calling_model(monkeypatch):
-    retrieve_and_rerank = AsyncMock(return_value=[])
-    response_user_query = AsyncMock()
+    ainvoke = AsyncMock(
+        return_value={
+            "answer": "未在文档中找到足够信息，无法回答",
+            "candidates": [],
+        }
+    )
     db = object()
 
-    monkeypatch.setattr(
-        router,
-        "retrieve_and_rerank",
-        retrieve_and_rerank,
+    create_conversation = AsyncMock(
+        return_value=SimpleNamespace(id="conversation-1"),
     )
-    monkeypatch.setattr(
-        router,
-        "response_user_query",
-        response_user_query,
-    )
+    add_message = AsyncMock()
+    monkeypatch.setattr(router, "create_conversation", create_conversation)
+    monkeypatch.setattr(router, "add_message", add_message)
 
     response = await router.query(
+        request_app=SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    rag_graph=SimpleNamespace(ainvoke=ainvoke),
+                ),
+            ),
+        ),
         request=QueryRequest(
             user_query="没有答案的问题",
             document_id=None,
@@ -53,42 +61,62 @@ async def test_query_returns_fallback_without_calling_model(monkeypatch):
     )
 
     assert isinstance(response, QueryResponse)
+    assert response.conversation_id == "conversation-1"
     assert response.answer == "未在文档中找到足够信息，无法回答"
     assert response.sources == []
-    retrieve_and_rerank.assert_awaited_once_with(
-        query="没有答案的问题",
-        user_id=3,
-        document_id=None,
-        db=db,
-        candidate_k=7,
-        final_k=3,
-        score_threshold=0.66,
-    )
-    response_user_query.assert_not_awaited()
+
+    call = ainvoke.await_args
+    assert call.args[0] == {
+        "messages": [
+            {
+                "role": "user",
+                "content": "没有答案的问题",
+            }
+        ],
+        "original_query": "没有答案的问题",
+        "search_query": "没有答案的问题",
+        "rewrite_count": 0,
+    }
+    assert call.kwargs["config"] == {
+        "configurable": {
+            "thread_id": "conversation-1",
+        },
+    }
+    context = call.kwargs["context"]
+    assert context.user_id == 3
+    assert context.document_id is None
+    assert context.db is db
+    assert context.retrieval.candidate_k == 7
+    assert context.retrieval.final_k == 3
+    assert context.retrieval.score_threshold == 0.66
+    assert add_message.await_count == 2
 
 
 async def test_query_returns_model_answer(monkeypatch):
     reranked_results = [make_retrieve_item()]
-    retrieve_and_rerank = AsyncMock(
-        return_value=reranked_results,
-    )
-    response_user_query = AsyncMock(
-        return_value="这是模型回答",
+    ainvoke = AsyncMock(
+        return_value={
+            "answer": "这是模型回答",
+            "candidates": reranked_results,
+        }
     )
     db = object()
 
-    monkeypatch.setattr(
-        router,
-        "retrieve_and_rerank",
-        retrieve_and_rerank,
+    create_conversation = AsyncMock(
+        return_value=SimpleNamespace(id="conversation-2"),
     )
-    monkeypatch.setattr(
-        router,
-        "response_user_query",
-        response_user_query,
-    )
+    add_message = AsyncMock()
+    monkeypatch.setattr(router, "create_conversation", create_conversation)
+    monkeypatch.setattr(router, "add_message", add_message)
 
     response = await router.query(
+        request_app=SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    rag_graph=SimpleNamespace(ainvoke=ainvoke),
+                ),
+            ),
+        ),
         request=QueryRequest(
             user_query="测试问题",
             document_id=9,
@@ -101,24 +129,38 @@ async def test_query_returns_model_answer(monkeypatch):
     )
 
     assert isinstance(response, QueryResponse)
+    assert response.conversation_id == "conversation-2"
     assert response.answer == "这是模型回答"
     assert len(response.sources) == 1
     assert response.sources[0].filename == "test.pdf"
     assert response.sources[0].page_number == 2
     assert response.sources[0].score == 0.97
-    retrieve_and_rerank.assert_awaited_once_with(
-        query="测试问题",
-        user_id=5,
-        document_id=9,
-        db=db,
-        candidate_k=8,
-        final_k=3,
-        score_threshold=0.75,
-    )
-    response_user_query.assert_awaited_once_with(
-        "测试问题",
-        reranked_results,
-    )
+
+    call = ainvoke.await_args
+    assert call.args[0] == {
+        "messages": [
+            {
+                "role": "user",
+                "content": "测试问题",
+            }
+        ],
+        "original_query": "测试问题",
+        "search_query": "测试问题",
+        "rewrite_count": 0,
+    }
+    assert call.kwargs["config"] == {
+        "configurable": {
+            "thread_id": "conversation-2",
+        },
+    }
+    context = call.kwargs["context"]
+    assert context.user_id == 5
+    assert context.document_id == 9
+    assert context.db is db
+    assert context.retrieval.candidate_k == 8
+    assert context.retrieval.final_k == 3
+    assert context.retrieval.score_threshold == 0.75
+    assert add_message.await_count == 2
 
 
 def test_query_request_validation():

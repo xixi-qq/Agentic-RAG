@@ -2,16 +2,17 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from apps import user,rag
+from apps.rag.workflow.graph import create_rag_graph
 from config.qdrant_config import client
 import os
 from dotenv import load_dotenv
-
-
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 load_dotenv()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # qdrant
     COLLECTION_NAME = os.getenv("COLLECTION_NAME")
     exists = await client.collection_exists(COLLECTION_NAME)
 
@@ -20,10 +21,21 @@ async def lifespan(_app: FastAPI):
             f"Qdrant Collection 不存在: {COLLECTION_NAME}"
         )
 
-    try:
-        yield
-    finally:
-        await client.close()
+    # checkpoint
+    uri = os.environ["LANGGRAPH_POSTGRES_URI"]
+    async with AsyncPostgresSaver.from_conn_string(
+            uri
+    ) as checkpointer:
+        await checkpointer.setup()
+        _app.state.rag_graph = create_rag_graph(
+            checkpointer
+        )
+
+        try:
+            yield
+        finally:
+            await client.close()
+
 
 
 
