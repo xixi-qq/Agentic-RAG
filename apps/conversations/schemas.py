@@ -31,15 +31,6 @@ class ConversationDetailResponse(BaseModel):
     updated_at: datetime
 
 
-class UpdateConversationTitleRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=100)
-
-
-class UpdateConversationTitleResponse(BaseModel):
-    id: str
-    title: str
-    updated_at: datetime
-
 
 class DeleteConversationResponse(BaseModel):
     message: str

@@ -35,11 +35,15 @@ async def test_query_returns_fallback_without_calling_model(monkeypatch):
     db = object()
 
     create_conversation = AsyncMock(
-        return_value=SimpleNamespace(id="conversation-1"),
+        return_value=SimpleNamespace(id="conversation-1", title=None),
     )
     add_message = AsyncMock()
+    generate_title = AsyncMock(return_value="没有答案的问题")
+    update_title = AsyncMock()
     monkeypatch.setattr(router, "create_conversation", create_conversation)
     monkeypatch.setattr(router, "add_message", add_message)
+    monkeypatch.setattr(router, "generate_conversation_title", generate_title)
+    monkeypatch.setattr(router, "update_conversation_title", update_title)
 
     response = await router.query(
         request_app=SimpleNamespace(
@@ -90,6 +94,16 @@ async def test_query_returns_fallback_without_calling_model(monkeypatch):
     assert context.retrieval.final_k == 3
     assert context.retrieval.score_threshold == 0.66
     assert add_message.await_count == 2
+    generate_title.assert_awaited_once_with(
+        "没有答案的问题",
+        "未在文档中找到足够信息，无法回答",
+    )
+    update_title.assert_awaited_once_with(
+        db,
+        3,
+        "conversation-1",
+        "没有答案的问题",
+    )
 
 
 async def test_query_returns_model_answer(monkeypatch):
@@ -103,11 +117,15 @@ async def test_query_returns_model_answer(monkeypatch):
     db = object()
 
     create_conversation = AsyncMock(
-        return_value=SimpleNamespace(id="conversation-2"),
+        return_value=SimpleNamespace(id="conversation-2", title=None),
     )
     add_message = AsyncMock()
+    generate_title = AsyncMock(return_value="测试问题")
+    update_title = AsyncMock()
     monkeypatch.setattr(router, "create_conversation", create_conversation)
     monkeypatch.setattr(router, "add_message", add_message)
+    monkeypatch.setattr(router, "generate_conversation_title", generate_title)
+    monkeypatch.setattr(router, "update_conversation_title", update_title)
 
     response = await router.query(
         request_app=SimpleNamespace(
@@ -161,6 +179,16 @@ async def test_query_returns_model_answer(monkeypatch):
     assert context.retrieval.final_k == 3
     assert context.retrieval.score_threshold == 0.75
     assert add_message.await_count == 2
+    generate_title.assert_awaited_once_with(
+        "测试问题",
+        "这是模型回答",
+    )
+    update_title.assert_awaited_once_with(
+        db,
+        5,
+        "conversation-2",
+        "测试问题",
+    )
 
 
 def test_query_request_validation():
