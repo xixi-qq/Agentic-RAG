@@ -57,6 +57,23 @@ async def test_parse_markdown():
         path.unlink(missing_ok=True)
 
 
+async def test_parse_gbk_text():
+    path = temporary_test_file(".txt")
+    try:
+        path.write_bytes("中文内容".encode("gbk"))
+
+        pages = await parse_document(
+            user_id=1,
+            path=str(path),
+            document=make_document("text/plain"),
+        )
+
+        assert len(pages) == 1
+        assert pages[0].content == "中文内容"
+    finally:
+        path.unlink(missing_ok=True)
+
+
 async def test_parse_empty_text_raises_error():
     path = temporary_test_file(".txt")
     try:

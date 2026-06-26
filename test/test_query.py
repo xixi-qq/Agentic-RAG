@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from apps.rag import router
+from apps.rag import query_service, router
 from apps.rag.schemas import (
     QueryRequest,
     QueryResponse,
@@ -40,10 +40,10 @@ async def test_query_returns_fallback_without_calling_model(monkeypatch):
     add_message = AsyncMock()
     generate_title = AsyncMock(return_value="没有答案的问题")
     update_title = AsyncMock()
-    monkeypatch.setattr(router, "create_conversation", create_conversation)
-    monkeypatch.setattr(router, "add_message", add_message)
-    monkeypatch.setattr(router, "generate_conversation_title", generate_title)
-    monkeypatch.setattr(router, "update_conversation_title", update_title)
+    monkeypatch.setattr(query_service, "create_conversation", create_conversation)
+    monkeypatch.setattr(query_service, "add_message", add_message)
+    monkeypatch.setattr(query_service, "generate_conversation_title", generate_title)
+    monkeypatch.setattr(query_service, "update_conversation_title", update_title)
 
     response = await router.query(
         request_app=SimpleNamespace(
@@ -122,10 +122,10 @@ async def test_query_returns_model_answer(monkeypatch):
     add_message = AsyncMock()
     generate_title = AsyncMock(return_value="测试问题")
     update_title = AsyncMock()
-    monkeypatch.setattr(router, "create_conversation", create_conversation)
-    monkeypatch.setattr(router, "add_message", add_message)
-    monkeypatch.setattr(router, "generate_conversation_title", generate_title)
-    monkeypatch.setattr(router, "update_conversation_title", update_title)
+    monkeypatch.setattr(query_service, "create_conversation", create_conversation)
+    monkeypatch.setattr(query_service, "add_message", add_message)
+    monkeypatch.setattr(query_service, "generate_conversation_title", generate_title)
+    monkeypatch.setattr(query_service, "update_conversation_title", update_title)
 
     response = await router.query(
         request_app=SimpleNamespace(
