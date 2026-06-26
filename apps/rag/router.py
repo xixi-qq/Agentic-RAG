@@ -5,8 +5,6 @@ from fastapi import APIRouter, File, UploadFile, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.conversations.crud import create_conversation, add_message, get_conversation_by_id, update_conversation_title
-from apps.conversations.service import generate_conversation_title
 from apps.rag.bm25 import bm25_cache
 from apps.rag.crud import (
     create_document,
@@ -17,10 +15,10 @@ from apps.rag.crud import (
 )
 from apps.rag.parser import calculate_file_hash
 from apps.rag.schemas import QueryRequest, QueryResponse
-from apps.rag.service import ingest_document, organize_response
+from apps.rag.query_service import ask_rag
+from apps.rag.service import ingest_document
 from apps.rag.storage import upload_file, delete_file
 from apps.rag.vector_store import delete_vectors
-from apps.rag.workflow.context import RAGRuntimeContext, RetrievalConfig
 from config.db_config import get_db
 from utils.jwt import get_current_user
 from settings import ALLOWED_TYPES
@@ -242,59 +240,12 @@ async def query(
         request: QueryRequest,
         user_info=Depends(get_current_user),
         db: AsyncSession=Depends(get_db)):
-    conversation_id = request.conversation_id
-    is_new_conversation = False
-    if request.conversation_id is None:
-        conversation = await create_conversation(db,user_info["user_id"])
-        conversation_id = conversation.id
-        is_new_conversation = True
-    else:
-        conversation = await get_conversation_by_id(
-            db,
-            user_info["user_id"],
-            request.conversation_id,
-        )
-        if conversation is None:
-            raise HTTPException(status_code=404, detail="会话不存在")
-
-    result = await request_app.app.state.rag_graph.ainvoke(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": request.user_query,
-                }
-            ],
-            "original_query": request.user_query,
-            "search_query": request.user_query,
-            "rewrite_count": 0,
-        },
-        config={
-            "configurable": {
-                "thread_id": conversation_id,
-            },
-        },
-        context=RAGRuntimeContext(
-            user_id=user_info["user_id"],
-            document_id=request.document_id,
-            db=db,
-            retrieval=RetrievalConfig(
-                candidate_k=request.candidate_k,
-                final_k=request.final_k,
-                score_threshold=request.score_threshold,
-            ),
-        ),
+    return await ask_rag(
+        rag_graph=request_app.app.state.rag_graph,
+        db=db,
+        user_info=user_info,
+        request=request,
     )
 
-    answer = result.get(
-        "answer",
-        "未在文档中找到足够信息，无法回答",
-    )
-    await add_message(db, user_info["user_id"], conversation_id, "user", request.user_query)
-    await add_message(db, user_info["user_id"], conversation_id, "assistant", answer)
-    if is_new_conversation and not conversation.title:
-        title = await generate_conversation_title(request.user_query, answer)
-        await update_conversation_title(db, user_info["user_id"],conversation_id,title,)
-    candidates = result.get("candidates",[])
-    response = organize_response(conversation_id,answer,candidates)
-    return response
+
+
