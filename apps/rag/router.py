@@ -8,15 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.rag.bm25 import bm25_cache
 from apps.rag.crud import (
     create_document,
-    delete_document_chunks,
     get_all_documents_by_user,
     get_document_by_hash,
     get_document_by_id
 )
 from apps.rag.parser import calculate_file_hash
+from apps.rag.queue import enqueue_document_ingestion
 from apps.rag.schemas import QueryRequest, QueryResponse
 from apps.rag.query_service import ask_rag
-from apps.rag.service import ingest_document
 from apps.rag.storage import upload_file, delete_file
 from apps.rag.vector_store import delete_vectors
 from config.db_config import get_db
@@ -70,8 +69,9 @@ async def upload_document(
     object_name = None
     metadata_committed = False
     try:
+        # 上传文件到minio，获取对象名，文件大小
         object_name,filesize = await upload_file(user_info['user_id'],file)
-
+        # MySQL插入数据
         document = await create_document(
             user_info,
             file,
@@ -85,29 +85,18 @@ async def upload_document(
         await db.refresh(document)
 
         try:
-            await ingest_document(user_info["user_id"],document,db)
-            await db.commit()
-            await db.refresh(document)
-            await bm25_cache.invalidate(
-                user_id=user_info["user_id"],
-                document_id=document.id,
-            )
+            # 加入任务队列
+            enqueue_document_ingestion(user_info["user_id"], document.id)
         except Exception as exc:
-            document_id = document.id
-            await db.rollback()
-
-            failed_document = await get_document_by_id(document_id, db)
-            if failed_document:
-                failed_document.status = "failed"
-                failed_document.error_message = f"{type(exc).__name__}: {str(exc)[:1000]}"
-                failed_document.chunk_count = 0
-                await db.commit()
-
+            # 后台解析失败，回滚元数据
+            document.status = "failed"
+            document.error_message = f"{type(exc).__name__}: {str(exc)[:1000]}"
+            await db.commit()
             raise HTTPException(
-                status_code=422,
+                status_code=503,
                 detail={
-                    "message": "文档解析失败，可以稍后重试",
-                    "document_id": document_id,
+                    "message": "文档已上传，但后台任务提交失败",
+                    "document_id": document.id,
                     "retryable": True,
                 },
             ) from exc
@@ -121,7 +110,7 @@ async def upload_document(
             'error_message':document.error_message,
             'chunk_count':document.chunk_count
         }
-        return JSONResponse(status_code=201,content=response_data)
+        return JSONResponse(status_code=202,content=response_data)
 
     except HTTPException:
         if not metadata_committed:
@@ -154,19 +143,13 @@ async def retry_document(
     if document.status != "failed":
         raise HTTPException(status_code=409, detail="只有解析失败的文档可以重试")
 
-    try:
-        await bm25_cache.invalidate(
-            user_id=user_info["user_id"],
-            document_id=document.id,
-        )
-        await delete_document_chunks(document.id, db)
-        await delete_vectors(document.id)
-        document.status = "processing"
-        document.error_message = None
-        document.chunk_count = 0
-        await db.commit()
+    document.status = "pending"
+    document.error_message = None
+    document.chunk_count = 0
 
-        await ingest_document(user_info["user_id"],document, db)
+    try:
+
+        enqueue_document_ingestion(user_info["user_id"], document.id)
         await db.commit()
         await db.refresh(document)
 
@@ -240,12 +223,24 @@ async def query(
         request: QueryRequest,
         user_info=Depends(get_current_user),
         db: AsyncSession=Depends(get_db)):
+    if request.document_id is not None:
+        document = await get_document_by_id(request.document_id, db)
+        if not document:
+            raise HTTPException(status_code=404, detail="文档不存在")
+        if document.user_id != user_info["user_id"]:
+            raise HTTPException(status_code=403, detail="无权限访问该文档")
+        if document.status in ("pending", "processing"):
+            raise HTTPException(status_code=409, detail="文档仍在处理中，请稍后再试")
+        if document.status == "failed":
+            raise HTTPException(status_code=409, detail="文档解析失败，请先重试")
+        if document.status != "completed":
+            raise HTTPException(status_code=409, detail="文档状态异常，暂不能检索")
+
     return await ask_rag(
         rag_graph=request_app.app.state.rag_graph,
         db=db,
         user_info=user_info,
         request=request,
     )
-
 
 

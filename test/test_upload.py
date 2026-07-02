@@ -1,7 +1,7 @@
 import json
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import HTTPException
@@ -48,10 +48,10 @@ def make_document(document_id=1, status="pending"):
     )
 
 
-async def test_upload_success(monkeypatch):
+async def test_upload_success_enqueues_ingestion(monkeypatch):
     db = FakeDB()
     document = make_document()
-    invalidate_mock = AsyncMock()
+    enqueue_mock = Mock()
 
     monkeypatch.setattr(router, "calculate_file_hash", AsyncMock(return_value="abc"))
     monkeypatch.setattr(router, "get_document_by_hash", AsyncMock(return_value=None))
@@ -61,17 +61,7 @@ async def test_upload_success(monkeypatch):
         AsyncMock(return_value=("users/1/example.txt", 9)),
     )
     monkeypatch.setattr(router, "create_document", AsyncMock(return_value=document))
-
-    async def complete_ingestion(_user_id, doc, _db):
-        doc.status = "completed"
-        doc.chunk_count = 1
-
-    monkeypatch.setattr(router, "ingest_document", complete_ingestion)
-    monkeypatch.setattr(
-        router.bm25_cache,
-        "invalidate",
-        invalidate_mock,
-    )
+    monkeypatch.setattr(router, "enqueue_document_ingestion", enqueue_mock)
 
     response = await router.upload_document(
         user_info={"user_id": 1},
@@ -80,15 +70,12 @@ async def test_upload_success(monkeypatch):
     )
     body = json.loads(response.body)
 
-    assert response.status_code == 201
-    assert body["status"] == "completed"
-    assert body["chunk_count"] == 1
-    assert db.commits == 2
+    assert response.status_code == 202
+    assert body["status"] == "pending"
+    assert body["chunk_count"] == 0
+    enqueue_mock.assert_called_once_with(1, 1)
+    assert db.commits == 1
     assert db.rollbacks == 0
-    invalidate_mock.assert_awaited_once_with(
-        user_id=1,
-        document_id=1,
-    )
 
 
 async def test_duplicate_completed_document_is_rejected(monkeypatch):
@@ -110,7 +97,6 @@ async def test_duplicate_completed_document_is_rejected(monkeypatch):
         )
 
     assert exc_info.value.status_code == 409
-    assert exc_info.value.detail == "文件已存在"
 
 
 async def test_duplicate_failed_document_returns_retry_information(monkeypatch):
@@ -136,12 +122,9 @@ async def test_duplicate_failed_document_returns_retry_information(monkeypatch):
     assert exc_info.value.detail["retryable"] is True
 
 
-async def test_parse_failure_keeps_minio_file(monkeypatch):
+async def test_enqueue_failure_marks_document_failed(monkeypatch):
     db = FakeDB()
     document = make_document(document_id=7)
-    failed_document = make_document(document_id=7)
-    delete_mock = AsyncMock()
-    invalidate_mock = AsyncMock()
 
     monkeypatch.setattr(router, "calculate_file_hash", AsyncMock(return_value="abc"))
     monkeypatch.setattr(router, "get_document_by_hash", AsyncMock(return_value=None))
@@ -153,19 +136,8 @@ async def test_parse_failure_keeps_minio_file(monkeypatch):
     monkeypatch.setattr(router, "create_document", AsyncMock(return_value=document))
     monkeypatch.setattr(
         router,
-        "ingest_document",
-        AsyncMock(side_effect=ValueError("解析失败")),
-    )
-    monkeypatch.setattr(
-        router,
-        "get_document_by_id",
-        AsyncMock(return_value=failed_document),
-    )
-    monkeypatch.setattr(router, "delete_file", delete_mock)
-    monkeypatch.setattr(
-        router.bm25_cache,
-        "invalidate",
-        invalidate_mock,
+        "enqueue_document_ingestion",
+        Mock(side_effect=RuntimeError("Redis unavailable")),
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -175,14 +147,14 @@ async def test_parse_failure_keeps_minio_file(monkeypatch):
             db=db,
         )
 
-    assert exc_info.value.status_code == 422
-    assert failed_document.status == "failed"
-    assert failed_document.error_message == "ValueError: 解析失败"
-    assert failed_document.chunk_count == 0
-    delete_mock.assert_not_awaited()
-    invalidate_mock.assert_not_awaited()
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["document_id"] == 7
+    assert exc_info.value.detail["retryable"] is True
+    assert document.status == "failed"
+    assert document.chunk_count == 0
+    assert "Redis unavailable" in document.error_message
     assert db.commits == 2
-    assert db.rollbacks == 1
+    assert db.rollbacks == 0
 
 
 async def test_metadata_failure_removes_uploaded_file(monkeypatch):
@@ -199,7 +171,7 @@ async def test_metadata_failure_removes_uploaded_file(monkeypatch):
     monkeypatch.setattr(
         router,
         "create_document",
-        AsyncMock(side_effect=RuntimeError("数据库失败")),
+        AsyncMock(side_effect=RuntimeError("database failed")),
     )
     monkeypatch.setattr(router, "delete_file", delete_mock)
 

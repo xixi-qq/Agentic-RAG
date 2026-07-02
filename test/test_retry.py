@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import HTTPException
@@ -28,37 +28,22 @@ def make_document(status="failed", user_id=1):
         id=9,
         user_id=user_id,
         status=status,
-        error_message="旧错误",
+        error_message="old error",
         chunk_count=3,
     )
 
 
-async def test_retry_failed_document_success(monkeypatch):
+async def test_retry_failed_document_enqueues_ingestion(monkeypatch):
     db = FakeDB()
     document = make_document()
-    cleanup_mock = AsyncMock()
-    vector_cleanup_mock = AsyncMock()
-    invalidate_mock = AsyncMock()
+    enqueue_mock = Mock()
 
     monkeypatch.setattr(
         router,
         "get_document_by_id",
         AsyncMock(return_value=document),
     )
-    monkeypatch.setattr(router, "delete_document_chunks", cleanup_mock)
-    monkeypatch.setattr(router, "delete_vectors", vector_cleanup_mock)
-    monkeypatch.setattr(
-        router.bm25_cache,
-        "invalidate",
-        invalidate_mock,
-    )
-
-    async def complete_ingestion(_user_id, doc, _db):
-        doc.status = "completed"
-        doc.error_message = None
-        doc.chunk_count = 2
-
-    monkeypatch.setattr(router, "ingest_document", complete_ingestion)
+    monkeypatch.setattr(router, "enqueue_document_ingestion", enqueue_mock)
 
     result = await router.retry_document(
         document_id=9,
@@ -66,16 +51,11 @@ async def test_retry_failed_document_success(monkeypatch):
         db=db,
     )
 
-    assert result["status"] == "completed"
-    assert result["chunk_count"] == 2
+    assert result["status"] == "pending"
+    assert result["chunk_count"] == 0
     assert result["error_message"] is None
-    cleanup_mock.assert_awaited_once_with(9, db)
-    vector_cleanup_mock.assert_awaited_once_with(9)
-    invalidate_mock.assert_awaited_once_with(
-        user_id=1,
-        document_id=9,
-    )
-    assert db.commits == 2
+    enqueue_mock.assert_called_once_with(1, 9)
+    assert db.commits == 1
     assert db.rollbacks == 0
 
 
@@ -133,28 +113,19 @@ async def test_retry_non_failed_document_returns_409(monkeypatch):
     assert exc_info.value.status_code == 409
 
 
-async def test_retry_failure_restores_failed_status(monkeypatch):
+async def test_retry_enqueue_failure_restores_failed_status(monkeypatch):
     db = FakeDB()
     document = make_document()
-    failed_document = make_document(status="processing")
-    invalidate_mock = AsyncMock()
 
     monkeypatch.setattr(
         router,
         "get_document_by_id",
-        AsyncMock(side_effect=[document, failed_document]),
-    )
-    monkeypatch.setattr(router, "delete_document_chunks", AsyncMock())
-    monkeypatch.setattr(router, "delete_vectors", AsyncMock())
-    monkeypatch.setattr(
-        router.bm25_cache,
-        "invalidate",
-        invalidate_mock,
+        AsyncMock(return_value=document),
     )
     monkeypatch.setattr(
         router,
-        "ingest_document",
-        AsyncMock(side_effect=ValueError("再次解析失败")),
+        "enqueue_document_ingestion",
+        Mock(side_effect=RuntimeError("Redis unavailable")),
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -165,12 +136,8 @@ async def test_retry_failure_restores_failed_status(monkeypatch):
         )
 
     assert exc_info.value.status_code == 422
-    assert failed_document.status == "failed"
-    assert failed_document.error_message == "再次解析失败"
-    assert failed_document.chunk_count == 0
-    invalidate_mock.assert_awaited_once_with(
-        user_id=1,
-        document_id=9,
-    )
-    assert db.commits == 2
+    assert document.status == "failed"
+    assert "Redis unavailable" in document.error_message
+    assert document.chunk_count == 0
+    assert db.commits == 1
     assert db.rollbacks == 1

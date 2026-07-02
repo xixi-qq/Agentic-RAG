@@ -31,6 +31,8 @@ dependencies = [
     "ragas>=0.4.3",
     "langchain-community>=0.4.2",
     "pymupdf>=1.27.2.3",
+    "redis>=8.0.1",
+    "rq>=2.10.0",
 ]
 
 [tool.pytest.ini_options]
